@@ -23,11 +23,6 @@ generate_source_dir(){
 
 generate_source_dir
 
-generate_fsrand(){
-    seed=$(date +%s)
-    python3 .github/scripts/fsrand.py -a -c 2000 -s $seed  fsrand
-}
-
 test_sync_with_mount_point(){
     do_sync_with_mount_point 
     do_sync_with_mount_point --list-threads 10 --list-depth 5
@@ -93,14 +88,6 @@ test_sync_with_deep_link(){
     ./juicefs sync jfs_source/ /jfs/jfs_source/ $options  2>&1 | tee err.log || true
     grep "Failed to handle 1 objects" err.log
     rm -rf jfs_source/symlink_*
-}
-
-skip_test_sync_fsrand_with_mount_point(){
-    generate_fsrand
-    do_test_sync_fsrand_with_mount_point 
-    do_test_sync_fsrand_with_mount_point --list-threads 10 --list-depth 5
-    do_test_sync_fsrand_with_mount_point --dirs --update --perms --check-all 
-    do_test_sync_fsrand_with_mount_point --dirs --update --perms --check-all --list-threads 10 --list-depth 5
 }
 
 do_test_sync_fsrand_with_mount_point(){
