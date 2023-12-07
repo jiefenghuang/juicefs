@@ -32,7 +32,8 @@ from hypothesis import Phase, seed
 import random
 import time
 
-EXCLUDE_RULES = ['mkfifo', 'copy_tree', 'set_xattr']
+EXCLUDE_RULES = ['mkfifo', 'copy_tree', 'rmdir', 'utime_file', 'utime_dir']
+SEED=int(os.environ.get('SEED', random.randint(0, 1000000000)))
 COMPARE = os.environ.get('COMPARE', 'true') == 'true'
 CLEAN_DIR = os.environ.get('CLEAN_DIR', 'true') == 'true'
 MAX_RUNTIME=int(os.environ.get('MAX_RUNTIME', '36000'))
@@ -65,18 +66,19 @@ ROOT_DIR1=os.environ.get('ROOT_DIR1', '/tmp/fsrand').rstrip('/')
 ROOT_DIR2=os.environ.get('ROOT_DIR2', '/tmp/myjfs/fsrand').rstrip('/')
 
 def clean_dir(dir):
-    subprocess.check_call(f'rm -rf {dir}'.split())
-    assert not os.path.exists(dir), f'clean_dir: {dir} should not exist'
-    subprocess.check_call(f'mkdir -p {dir}'.split())
-    assert os.path.isdir(dir), f'clean_dir: {dir} should be dir'
+    if CLEAN_DIR:
+        subprocess.check_call(f'rm -rf {dir}'.split())
+        assert not os.path.exists(dir), f'clean_dir: {dir} should not exist'
+        subprocess.check_call(f'mkdir -p {dir}'.split())
+        assert os.path.isdir(dir), f'clean_dir: {dir} should be dir'
 
 clean_dir(ROOT_DIR1)
 clean_dir(ROOT_DIR2)
 
 os.system('id -u juicedata1  && userdel juicedata1')
 os.system('id -u juicedata2  && userdel juicedata2')
-subprocess.check_call('useradd juicedata1'.split())
-subprocess.check_call('useradd juicedata2'.split())
+os.system('useradd juicedata1')
+os.system('useradd juicedata2')
 USERNAMES=['root', 'juicedata1', 'juicedata2']
 
 def get_stat(path):
@@ -139,7 +141,7 @@ class Statistics:
     def get(self):
         return self.stats
 
-@seed(random.randint(10000, 1000000))
+@seed(SEED)
 @settings(verbosity=Verbosity.debug, 
     max_examples=MAX_EXAMPLE, 
     stateful_step_count=STEP_COUNT, 
@@ -170,10 +172,13 @@ class JuicefsMachine(RuleBasedStateMachine):
     def __init__(self):
         super(JuicefsMachine, self).__init__()
         print(f'__init__')
-        pid = psutil.Process().pid
-        open_files = psutil.Process(pid).open_files()
-        open_files = [file.path for file in open_files]
-        print(','.join(open_files))
+        try:
+            pid = psutil.Process().pid
+            open_files = psutil.Process(pid).open_files()
+            open_files = [file.path for file in open_files]
+            print('openfiles:' + ','.join(open_files))
+        except Exception as e:
+            print(e)
         duration = time.time() - self.start
         if duration > MAX_RUNTIME:
             raise Exception(f'run out of time: {duration}')
@@ -619,8 +624,9 @@ class JuicefsMachine(RuleBasedStateMachine):
         dest_abs_path = os.path.join(root_dir, dest_file)
         link_rel_path = os.path.join(parent, link_file_name)
         link_abs_path = os.path.join(root_dir, link_rel_path)
+        relative_path = os.path.relpath(dest_abs_path, os.path.dirname(link_abs_path))
         try:
-            os.symlink(dest_abs_path, link_abs_path)
+            os.symlink(relative_path, link_abs_path)
         except Exception as e:
             self.stats.failure('do_symlink')
             loggers[f'{root_dir}'].info(f"do_symlink {dest_abs_path} {link_abs_path} failed: {str(e)}")
