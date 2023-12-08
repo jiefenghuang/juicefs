@@ -5,9 +5,9 @@ source .github/scripts/common/common.sh
 [[ -z "$META" ]] && META=redis
 [[ -z "$SEED" ]] && SEED=$(date +%s)
 [[ -z "$MAX_EXAMPLE" ]] && MAX_EXAMPLE=100
-[[ -z "$COVERDIR" ]] && COVERDIR=/tmp/cover
-if [ ! -d "$COVERDIR" ]; then
-    mkdir -p $COVERDIR
+[[ -z "$GOCOVERDIR" ]] && GOCOVERDIR=/tmp/cover
+if [ ! -d "$GOCOVERDIR" ]; then
+    mkdir -p $GOCOVERDIR
 fi
 trap "echo random seed is $SEED" EXIT
 source .github/scripts/start_meta_engine.sh
@@ -29,15 +29,15 @@ test_sync_with_mount_point(){
     chmod 777 $SOURCE_DIR1
     chmod 777 $SOURCE_DIR2
     ./juicefs format $META_URL myjfs
-    COVERDIR=$COVERDIR ./juicefs mount -d $META_URL /jfs --enable-xattr
+    GOCOVERDIR=$GOCOVERDIR ./juicefs mount -d $META_URL /jfs --enable-xattr
     cat /jfs/.accesslog > accesslog &
     jobid=$!
     trap "kill -9 $jobid" EXIT
     for i in {1..1}; do
         rm $DEST_DIR1 -rf
         rm $DEST_DIR2 -rf
-        sudo -u $user COVERDIR=$COVERDIR ./juicefs sync -v $SOURCE_DIR1 $DEST_DIR1 --dirs --perms --check-all --links --list-threads 10 --list-depth 5 2>&1| tee sync1.log
-        echo sudo -u $user COVERDIR=$COVERDIR ./juicefs sync -v $SOURCE_DIR1 $DEST_DIR1 --dirs --perms --check-all --links --list-threads 10 --list-depth 5
+        sudo -u $user GOCOVERDIR=$GOCOVERDIR ./juicefs sync -v $SOURCE_DIR1 $DEST_DIR1 --dirs --perms --check-all --links --list-threads 10 --list-depth 5 2>&1| tee sync1.log
+        echo sudo -u $user GOCOVERDIR=$GOCOVERDIR ./juicefs sync -v $SOURCE_DIR1 $DEST_DIR1 --dirs --perms --check-all --links --list-threads 10 --list-depth 5
         sudo -u $user cp -a $SOURCE_DIR1 $DEST_DIR2  || true
         check_diff $DEST_DIR1 $DEST_DIR2
     done
@@ -46,8 +46,8 @@ test_sync_with_mount_point(){
     chmod 777 $SOURCE_DIR1
     chmod 777 $SOURCE_DIR2
     for i in {1..100}; do
-        sudo -u $user COVERDIR=$COVERDIR ./juicefs sync -v $SOURCE_DIR1 $DEST_DIR1 --dirs --perms --check-all --links --update --delete-dst --list-threads 10 --list-depth 5 2>&1| tee sync2.log || true
-        echo sudo -u $user COVERDIR=$COVERDIR ./juicefs sync -v $SOURCE_DIR1 $DEST_DIR1 --dirs --perms --check-all --links --update --delete-dst --list-threads 10 --list-depth 5 2>&1
+        sudo -u $user GOCOVERDIR=$GOCOVERDIR ./juicefs sync -v $SOURCE_DIR1 $DEST_DIR1 --dirs --perms --check-all --links --update --delete-dst --list-threads 10 --list-depth 5 2>&1| tee sync2.log || true
+        echo sudo -u $user GOCOVERDIR=$GOCOVERDIR ./juicefs sync -v $SOURCE_DIR1 $DEST_DIR1 --dirs --perms --check-all --links --update --delete-dst --list-threads 10 --list-depth 5 2>&1
         if grep -q "Failed to delete" sync2.log; then
             echo "failed to delete, retry sync"
         else
