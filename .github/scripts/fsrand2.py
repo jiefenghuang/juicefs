@@ -31,8 +31,10 @@ from hypothesis.stateful import rule, precondition, RuleBasedStateMachine, Bundl
 from hypothesis import Phase, seed
 import random
 import time
-
-EXCLUDE_RULES = ['mkfifo', 'copy_tree', 'rmdir', 'utime_file', 'utime_dir']
+if os.environ.get('EXCLUDE_RULES', None) is None:
+    EXCLUDE_RULES = ['mkfifo', 'copy_tree']
+else:
+    EXCLUDE_RULES = os.environ.get('EXCLUDE_RULES').split(',')
 SEED=int(os.environ.get('SEED', random.randint(0, 1000000000)))
 COMPARE = os.environ.get('COMPARE', 'true') == 'true'
 CLEAN_DIR = os.environ.get('CLEAN_DIR', 'true') == 'true'

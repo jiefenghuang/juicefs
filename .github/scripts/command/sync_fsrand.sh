@@ -21,6 +21,7 @@ DEST_DIR1=/jfs/fsrand1/
 DEST_DIR2=/jfs/fsrand2/
 rm $SOURCE_DIR1 -rf && sudo -u $USER mkdir $SOURCE_DIR1
 rm $SOURCE_DIR2 -rf && sudo -u $USER mkdir $SOURCE_DIR2
+EXCLUDE_RULES="mkfifo,copy_tree,rmdir,utime_file,utime_dir"
 
 test_sync(){
     do_sync --dirs --perms --check-all --links --list-threads 10 --list-depth 5
@@ -55,7 +56,7 @@ test_sync_mp_without_links(){
 do_sync(){
     prepare_test
     local sync_option=$@
-    sudo -u $USER MAX_EXAMPLE=$MAX_EXAMPLE SEED=$SEED DERANDOMIZE=true CLEAN_DIR=False ROOT_DIR1=$SOURCE_DIR1 ROOT_DIR2=$SOURCE_DIR2 python3 .github/scripts/fsrand2.py
+    sudo -u $USER EXCLUDE_RULES=$EXCLUDE_RULES MAX_EXAMPLE=$MAX_EXAMPLE SEED=$SEED DERANDOMIZE=true CLEAN_DIR=False ROOT_DIR1=$SOURCE_DIR1 ROOT_DIR2=$SOURCE_DIR2 python3 .github/scripts/fsrand2.py
     ./juicefs format $META_URL myjfs
     for i in {1..1}; do
         rm $DEST_DIR1 -rf
@@ -71,7 +72,7 @@ do_sync(){
 do_sync_with_mp(){
     prepare_test
     local sync_option=$@
-    sudo -u $USER MAX_EXAMPLE=$MAX_EXAMPLE SEED=$SEED DERANDOMIZE=true CLEAN_DIR=False ROOT_DIR1=$SOURCE_DIR1 ROOT_DIR2=$SOURCE_DIR2 python3 .github/scripts/fsrand2.py
+    sudo -u $USER EXCLUDE_RULES=$EXCLUDE_RULES MAX_EXAMPLE=$MAX_EXAMPLE SEED=$SEED DERANDOMIZE=true CLEAN_DIR=False ROOT_DIR1=$SOURCE_DIR1 ROOT_DIR2=$SOURCE_DIR2 python3 .github/scripts/fsrand2.py
     #FIXME: remove this line
     chmod 777 $SOURCE_DIR1
     chmod 777 $SOURCE_DIR2
@@ -92,7 +93,7 @@ do_sync_with_mp(){
 
 do_update(){
     local sync_option=$@
-    sudo -u $USER MAX_EXAMPLE=$MAX_EXAMPLE SEED=$SEED DERANDOMIZE=true CLEAN_DIR=False ROOT_DIR1=$SOURCE_DIR1 ROOT_DIR2=$SOURCE_DIR2 python3 .github/scripts/fsrand2.py
+    sudo -u $USER EXCLUDE_RULES=$EXCLUDE_RULES MAX_EXAMPLE=$MAX_EXAMPLE SEED=$SEED DERANDOMIZE=true CLEAN_DIR=False ROOT_DIR1=$SOURCE_DIR1 ROOT_DIR2=$SOURCE_DIR2 python3 .github/scripts/fsrand2.py
     for i in {1..5}; do
         sudo -u $USER GOCOVERDIR=$GOCOVERDIR meta_url=$META_URL ./juicefs sync $SOURCE_DIR1 jfs://meta_url/fsrand1/ $sync_option 2>&1| tee sync.log || true
         echo sudo -u $USER GOCOVERDIR=$GOCOVERDIR meta_url=$META_URL ./juicefs sync $SOURCE_DIR1 jfs://meta_url/fsrand1/ $sync_option
@@ -109,7 +110,7 @@ do_update(){
 
 do_update_with_mp(){
     local sync_option=$@
-    sudo -u $USER MAX_EXAMPLE=$MAX_EXAMPLE SEED=$SEED DERANDOMIZE=true CLEAN_DIR=False ROOT_DIR1=$SOURCE_DIR1 ROOT_DIR2=$SOURCE_DIR2 python3 .github/scripts/fsrand2.py
+    sudo -u $USER EXCLUDE_RULES=$EXCLUDE_RULES MAX_EXAMPLE=$MAX_EXAMPLE SEED=$SEED DERANDOMIZE=true CLEAN_DIR=False ROOT_DIR1=$SOURCE_DIR1 ROOT_DIR2=$SOURCE_DIR2 python3 .github/scripts/fsrand2.py
     for i in {1..100}; do
         sudo -u $USER GOCOVERDIR=$GOCOVERDIR ./juicefs sync -v $SOURCE_DIR1 $DEST_DIR1 $sync_option  2>&1| tee sync.log || true
         echo sudo -u $USER GOCOVERDIR=$GOCOVERDIR ./juicefs sync -v $SOURCE_DIR1 $DEST_DIR1 $sync_option
