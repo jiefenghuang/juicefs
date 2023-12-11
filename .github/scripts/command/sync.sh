@@ -47,7 +47,6 @@ do_sync_without_mount_point(){
     if [[ ! "$options" =~ "--dirs" ]]; then
         find jfs_source -type d -empty -delete
     fi
-    find /jfs/jfs_source -type f -name ".*.tmp*" -delete
     diff -ur --no-dereference  jfs_source/ /jfs/jfs_source
 }
 
@@ -61,7 +60,6 @@ do_sync_with_mount_point(){
     if [[ ! "$options" =~ "--dirs" ]]; then
         find jfs_source -type d -empty -delete
     fi
-    find /jfs/jfs_source -type f -name ".*.tmp*" -delete
     diff -ur --no-dereference jfs_source/ /jfs/jfs_source/
 }
 

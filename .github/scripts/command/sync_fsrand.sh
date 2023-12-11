@@ -22,18 +22,55 @@ DEST_DIR2=/jfs/fsrand2/
 rm $SOURCE_DIR1 -rf && sudo -u $USER mkdir $SOURCE_DIR1
 rm $SOURCE_DIR2 -rf && sudo -u $USER mkdir $SOURCE_DIR2
 
-test_sync_mp(){
-    do_sync_with_mount_point --dirs --perms --check-all --links --list-threads 10 --list-depth 5
+test_sync(){
+    do_sync --dirs --perms --check-all --links --list-threads 10 --list-depth 5
     do_update --dirs --perms --check-all --links --update --delete-dst --list-threads 10 --list-depth 5
 }
-test_sync_mp_without_perms(){
-    do_sync_with_mount_point --dirs --check-all --links --list-threads 10 --list-depth 5
+
+test_sync_without_perms(){
+    do_sync --dirs --check-all --links --list-threads 10 --list-depth 5
     do_update --dirs --check-all --links --update --delete-dst --list-threads 10 --list-depth 5
 }
 
-do_sync_with_mount_point(){
+test_sync_without_links(){
+    do_sync --dirs --perms --check-all --list-threads 10 --list-depth 5
+    do_update --dirs --perms --check-all --update --delete-dst --list-threads 10 --list-depth 5
+}
+
+test_sync_mp(){
+    do_sync_with_mp --dirs --perms --check-all --links --list-threads 10 --list-depth 5
+    do_update_with_mp --dirs --perms --check-all --links --update --delete-dst --list-threads 10 --list-depth 5
+}
+
+test_sync_mp_without_perms(){
+    do_sync_with_mp --dirs --check-all --links --list-threads 10 --list-depth 5
+    do_update_with_mp --dirs --check-all --links --update --delete-dst --list-threads 10 --list-depth 5
+}
+
+test_sync_mp_without_links(){
+    do_sync_with_mp --dirs --perms --check-all --list-threads 10 --list-depth 5
+    do_update_with_mp --dirs --perms --check-all --update --delete-dst --list-threads 10 --list-depth 5
+}
+
+do_sync(){
     prepare_test
-    sync_option=$@
+    local sync_option=$@
+    sudo -u $USER MAX_EXAMPLE=$MAX_EXAMPLE SEED=$SEED DERANDOMIZE=true CLEAN_DIR=False ROOT_DIR1=$SOURCE_DIR1 ROOT_DIR2=$SOURCE_DIR2 python3 .github/scripts/fsrand2.py
+    ./juicefs format $META_URL myjfs
+    for i in {1..1}; do
+        rm $DEST_DIR1 -rf
+        rm $DEST_DIR2 -rf
+        sudo -u $USER GOCOVERDIR=$GOCOVERDIR meta_url=$META_URL ./juicefs sync $SOURCE_DIR1 jfs://meta_url/fsrand1/ $sync_option 2>&1| tee sync.log || true
+        echo sudo -u $USER GOCOVERDIR=$GOCOVERDIR meta_url=$META_URL ./juicefs sync $SOURCE_DIR1 jfs://meta_url/fsrand1/ $sync_option
+        ./juicefs mount -d $META_URL /jfs
+        do_copy $sync_option
+        check_diff $DEST_DIR1 $DEST_DIR2
+    done
+}
+
+do_sync_with_mp(){
+    prepare_test
+    local sync_option=$@
     sudo -u $USER MAX_EXAMPLE=$MAX_EXAMPLE SEED=$SEED DERANDOMIZE=true CLEAN_DIR=False ROOT_DIR1=$SOURCE_DIR1 ROOT_DIR2=$SOURCE_DIR2 python3 .github/scripts/fsrand2.py
     #FIXME: remove this line
     chmod 777 $SOURCE_DIR1
@@ -41,59 +78,83 @@ do_sync_with_mount_point(){
     GOCOVERDIR=$GOCOVERDIR ./juicefs format $META_URL myjfs
     GOCOVERDIR=$GOCOVERDIR ./juicefs mount -d $META_URL /jfs --enable-xattr
     cat /jfs/.accesslog > accesslog &
-    jobid=$!
-    trap "kill -9 $jobid" EXIT
+    local jobid=$!
+    trap "kill -9 $jobid || true" EXIT
     for i in {1..1}; do
         rm $DEST_DIR1 -rf
         rm $DEST_DIR2 -rf
-        sudo -u $USER GOCOVERDIR=$GOCOVERDIR ./juicefs sync -v $SOURCE_DIR1 $DEST_DIR1 $sync_option 2>&1| tee sync.log
+        sudo -u $USER GOCOVERDIR=$GOCOVERDIR ./juicefs sync -v $SOURCE_DIR1 $DEST_DIR1 $sync_option 2>&1| tee sync.log || true
         echo sudo -u $USER GOCOVERDIR=$GOCOVERDIR ./juicefs sync -v $SOURCE_DIR1 $DEST_DIR1 $sync_option 
-        do_copy_by_sync_option $sync_option
+        do_copy $sync_option
         check_diff $DEST_DIR1 $DEST_DIR2
     done
 }
 
-do_copy_by_sync_option(){
-    sync_option=$@
-    preserve="timestamps"
-    no_preserve=""
-    if [[ "$sync_option" =~ "--perms" ]]; then
-        preserve+="mode,ownership"
-    else
-        no_preserve+="mode,ownership"
-    fi
-    if [[ "$sync_option" =~ "--links" ]]; then
-       preserve+=",links"
-    fi
-    cp_option="--recursive --no-dereference --preserve=$preserve --no-preserve=$no_preserve"
-    rm -rf $DEST_DIR2 
-    sudo -u $USER cp  $SOURCE_DIR1 $DEST_DIR2 $cp_option
-    echo sudo -u $USER cp  $SOURCE_DIR1 $DEST_DIR2 $cp_option
-}
-
 do_update(){
-    sync_option=$@
+    local sync_option=$@
     sudo -u $USER MAX_EXAMPLE=$MAX_EXAMPLE SEED=$SEED DERANDOMIZE=true CLEAN_DIR=False ROOT_DIR1=$SOURCE_DIR1 ROOT_DIR2=$SOURCE_DIR2 python3 .github/scripts/fsrand2.py
-    for i in {1..10}; do
-        sudo -u $USER GOCOVERDIR=$GOCOVERDIR ./juicefs sync -v $SOURCE_DIR1 $DEST_DIR1 $sync_option  2>&1| tee sync.log || true
-        echo sudo -u $USER GOCOVERDIR=$GOCOVERDIR ./juicefs sync -v $SOURCE_DIR1 $DEST_DIR1 $sync_option
-        if grep -q "Failed to delete" sync2.log; then
+    for i in {1..5}; do
+        sudo -u $USER GOCOVERDIR=$GOCOVERDIR meta_url=$META_URL ./juicefs sync $SOURCE_DIR1 jfs://meta_url/fsrand1/ $sync_option 2>&1| tee sync.log || true
+        echo sudo -u $USER GOCOVERDIR=$GOCOVERDIR meta_url=$META_URL ./juicefs sync $SOURCE_DIR1 jfs://meta_url/fsrand1/ $sync_option
+        if grep -q "Failed to delete" sync.log; then
             echo "failed to delete, retry sync"
         else
             echo "sync delete success"
             break
         fi
     done
-    do_copy_by_sync_option $sync_option
+    do_copy $sync_option
     check_diff $DEST_DIR1 $DEST_DIR2
 }
 
+do_update_with_mp(){
+    local sync_option=$@
+    sudo -u $USER MAX_EXAMPLE=$MAX_EXAMPLE SEED=$SEED DERANDOMIZE=true CLEAN_DIR=False ROOT_DIR1=$SOURCE_DIR1 ROOT_DIR2=$SOURCE_DIR2 python3 .github/scripts/fsrand2.py
+    for i in {1..100}; do
+        sudo -u $USER GOCOVERDIR=$GOCOVERDIR ./juicefs sync -v $SOURCE_DIR1 $DEST_DIR1 $sync_option  2>&1| tee sync.log || true
+        echo sudo -u $USER GOCOVERDIR=$GOCOVERDIR ./juicefs sync -v $SOURCE_DIR1 $DEST_DIR1 $sync_option
+        if grep -q "Failed to delete" sync.log; then
+            echo "failed to delete, retry sync"
+        else
+            echo "sync delete success"
+            break
+        fi
+    done
+    do_copy $sync_option
+    check_diff $DEST_DIR1 $DEST_DIR2
+}
+
+do_copy(){
+    local sync_option=$@
+    local preserve="timestamps"
+    local no_preserve=""
+    if [[ "$sync_option" =~ "--perms" ]]; then
+        preserve+=",mode,ownership"
+    else
+        no_preserve+="mode,ownership"
+    fi
+    if [[ "$sync_option" =~ "--links" ]]; then
+       preserve+=",links"
+    fi
+    local cp_option="--recursive --preserve=$preserve"
+    if [[ -n "$no_preserve" ]]; then
+        cp_option+=" --no-preserve=$no_preserve"
+    fi
+    if [[ "$sync_option" =~ "--links" ]]; then
+        cp_option+=" --no-dereference"
+    else
+        cp_option+=" --dereference"
+    fi
+    rm -rf $DEST_DIR2 
+    sudo -u $USER cp  $SOURCE_DIR1 $DEST_DIR2 $cp_option || true
+    echo sudo -u $USER cp  $SOURCE_DIR1 $DEST_DIR2 $cp_option
+}
 
 check_diff(){
-    dir1=$1
-    dir2=$2
+    local dir1=$1
+    local dir2=$2
     diff -ur --no-dereference $dir1 $dir2
-    count=$(find $dir2 -type f -name "*.*.tmp*" | wc -l)
+    local count=$(find $dir2 -type f -name "*.*.tmp*" | wc -l)
     if [ $count -ne 0 ]; then
         echo "tmp file exists"
         find $dir2 -type f -name "*.*.tmp*" -exec ls -l {} \;
