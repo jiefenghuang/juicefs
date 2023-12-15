@@ -28,6 +28,11 @@ test_sync(){
     do_update --dirs --perms --check-all --links --update --delete-dst --list-threads 10 --list-depth 5
 }
 
+test_sync_inplace(){
+    do_sync --dirs --perms --check-all --links --list-threads 10 --list-depth 5 --inplace
+    do_update --dirs --perms --check-all --links --update --delete-dst --list-threads 10 --list-depth 5 --inplace
+}
+
 test_sync_without_perms(){
     do_sync --dirs --check-all --links --list-threads 10 --list-depth 5
     do_update --dirs --check-all --links --update --delete-dst --list-threads 10 --list-depth 5
@@ -57,6 +62,7 @@ do_sync(){
     prepare_test
     local sync_option=$@
     sudo -u $USER EXCLUDE_RULES=$EXCLUDE_RULES MAX_EXAMPLE=$MAX_EXAMPLE SEED=$SEED DERANDOMIZE=true CLEAN_DIR=False ROOT_DIR1=$SOURCE_DIR1 ROOT_DIR2=$SOURCE_DIR2 python3 .github/scripts/fsrand2.py
+    echo sudo -u $USER EXCLUDE_RULES=$EXCLUDE_RULES MAX_EXAMPLE=$MAX_EXAMPLE SEED=$SEED DERANDOMIZE=true CLEAN_DIR=False ROOT_DIR1=$SOURCE_DIR1 ROOT_DIR2=$SOURCE_DIR2 python3 .github/scripts/fsrand2.py
     ./juicefs format $META_URL myjfs
     for i in {1..1}; do
         rm $DEST_DIR1 -rf
