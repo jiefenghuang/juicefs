@@ -300,13 +300,6 @@ type DumpedMeta struct {
 	Trash     *DumpedEntry         `json:",omitempty"`
 }
 
-func (dm *DumpedMeta) validate() error {
-	if dm.Counters == nil {
-		return errors.New("invalid dumped meta: missing 'Counters'")
-	}
-	return nil
-}
-
 func (dm *DumpedMeta) writeJsonWithOutTree(w io.Writer) (*bufio.Writer, error) {
 	if dm.FSTree != nil || dm.Trash != nil {
 		return nil, fmt.Errorf("invalid dumped meta")
@@ -432,7 +425,8 @@ func loadEntries(r io.Reader, load func(*DumpedEntry), addChunk func(*chunkKey))
 	_, _ = dec.Token() // }
 	progress.Done()
 
-	if err = dm.validate(); err != nil {
+	if dm.Counters == nil {
+		err = errors.New("invalid dumped meta: missing 'Counters'")
 		return
 	}
 
