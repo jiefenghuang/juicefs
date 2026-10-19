@@ -2215,26 +2215,8 @@ func (m *kvMeta) doRename(ctx Context, parentSrc Ino, nameSrc string, parentDst 
 		}
 		var sattr, dattr, iattr Attr
 		m.parseAttr(rs[0], &sattr)
-		if sattr.Typ != TypeDirectory {
-			return syscall.ENOTDIR
-		}
 		m.parseAttr(rs[1], &dattr)
-		if dattr.Typ != TypeDirectory {
-			return syscall.ENOTDIR
-		}
-		if flags&RenameRestore == 0 && dattr.Parent > TrashInode {
-			return syscall.ENOENT
-		}
-		// Like Linux, only lookups are checked before detecting a rename
-		// between two names of the same file, which succeeds as a no-op.
-		if st := m.Access(ctx, parentSrc, MODE_MASK_X, &sattr); st != 0 {
-			return st
-		}
-		if st := m.Access(ctx, parentDst, MODE_MASK_X, &dattr); st != 0 {
-			return st
-		}
 		m.parseAttr(rs[2], &iattr)
-
 		dbuf := rs[3]
 		if dbuf == nil && m.conf.CaseInsensi {
 			if e := m.resolveCase(ctx, parentDst, nameDst); e != nil {
@@ -2245,26 +2227,38 @@ func (m *kvMeta) doRename(ctx Context, parentSrc Ino, nameSrc string, parentDst 
 			}
 		}
 		if dbuf != nil {
+			dtyp, dino = m.parseEntry(dbuf)
+		}
+		// Like Linux, renaming between two names of the same file succeeds without
+		// any other action once both names are resolved.
+		if dino == ino && sattr.Typ == TypeDirectory && dattr.Typ == TypeDirectory &&
+			(flags&RenameRestore != 0 || dattr.Parent <= TrashInode) &&
+			m.Access(ctx, parentSrc, MODE_MASK_X, &sattr) == 0 && m.Access(ctx, parentDst, MODE_MASK_X, &dattr) == 0 {
 			if flags&RenameNoReplace != 0 {
 				return syscall.EEXIST
 			}
-			dtyp, dino = m.parseEntry(dbuf)
-			if dino == ino {
-				if inode != nil {
-					*inode = ino
-				}
-				if attr != nil {
-					*attr = iattr
-				}
-				*tInode = dino
-				return nil
+			if inode != nil {
+				*inode = ino
 			}
+			if attr != nil {
+				*attr = iattr
+			}
+			*tInode = ino
+			return nil
 		}
-
-		if st := m.Access(ctx, parentSrc, MODE_MASK_W, &sattr); st != 0 {
+		if sattr.Typ != TypeDirectory {
+			return syscall.ENOTDIR
+		}
+		if st := m.Access(ctx, parentSrc, MODE_MASK_W|MODE_MASK_X, &sattr); st != 0 {
 			return st
 		}
-		if st := m.Access(ctx, parentDst, MODE_MASK_W, &dattr); st != 0 {
+		if dattr.Typ != TypeDirectory {
+			return syscall.ENOTDIR
+		}
+		if flags&RenameRestore == 0 && dattr.Parent > TrashInode {
+			return syscall.ENOENT
+		}
+		if st := m.Access(ctx, parentDst, MODE_MASK_W|MODE_MASK_X, &dattr); st != 0 {
 			return st
 		}
 		// TODO: check parentDst is a subdir of source node
@@ -2282,6 +2276,9 @@ func (m *kvMeta) doRename(ctx Context, parentSrc Ino, nameSrc string, parentDst 
 		var supdate, dupdate bool
 		now := time.Now()
 		if dbuf != nil {
+			if flags&RenameNoReplace != 0 {
+				return syscall.EEXIST
+			}
 			a := tx.get(m.inodeKey(dino))
 			if a == nil { // corrupt entry
 				logger.Warnf("no attribute for inode %d (%d, %s)", dino, parentDst, nameDst)

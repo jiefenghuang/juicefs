@@ -2489,6 +2489,9 @@ func (m *redisMeta) doRename(ctx Context, parentSrc Ino, nameSrc string, parentD
 		}
 		if err == nil {
 			dtyp, dino = m.parseEntry(dbuf)
+			if flags&RenameNoReplace != 0 && dino != ino {
+				return syscall.EEXIST
+			}
 			keys = append(keys, m.inodeKey(dino))
 			if dtyp == TypeDirectory {
 				keys = append(keys, m.entryKey(dino))
@@ -2516,42 +2519,38 @@ func (m *redisMeta) doRename(ctx Context, parentSrc Ino, nameSrc string, parentD
 		}
 		var sattr, dattr, iattr Attr
 		m.parseAttr([]byte(rs[0].(string)), &sattr)
-		if sattr.Typ != TypeDirectory {
-			return syscall.ENOTDIR
-		}
 		m.parseAttr([]byte(rs[1].(string)), &dattr)
-		if dattr.Typ != TypeDirectory {
-			return syscall.ENOTDIR
-		}
-		if flags&RenameRestore == 0 && dattr.Parent > TrashInode {
-			return syscall.ENOENT
-		}
-		// Like Linux, only lookups are checked before detecting a rename
-		// between two names of the same file, which succeeds as a no-op.
-		if st := m.Access(ctx, parentSrc, MODE_MASK_X, &sattr); st != 0 {
-			return st
-		}
-		if st := m.Access(ctx, parentDst, MODE_MASK_X, &dattr); st != 0 {
-			return st
-		}
 		m.parseAttr([]byte(rs[2].(string)), &iattr)
-		if dino > 0 && flags&RenameNoReplace != 0 {
-			return syscall.EEXIST
-		}
-		if dino > 0 && ino == dino {
+		// Like Linux, renaming between two names of the same file succeeds without
+		// any other action once both names are resolved.
+		if dino == ino && sattr.Typ == TypeDirectory && dattr.Typ == TypeDirectory &&
+			(flags&RenameRestore != 0 || dattr.Parent <= TrashInode) &&
+			m.Access(ctx, parentSrc, MODE_MASK_X, &sattr) == 0 && m.Access(ctx, parentDst, MODE_MASK_X, &dattr) == 0 {
+			if flags&RenameNoReplace != 0 {
+				return syscall.EEXIST
+			}
 			if inode != nil {
 				*inode = ino
 			}
 			if attr != nil {
 				*attr = iattr
 			}
-			*tInode = dino
+			*tInode = ino
 			return errno(nil)
 		}
-		if st := m.Access(ctx, parentSrc, MODE_MASK_W, &sattr); st != 0 {
+		if sattr.Typ != TypeDirectory {
+			return syscall.ENOTDIR
+		}
+		if st := m.Access(ctx, parentSrc, MODE_MASK_W|MODE_MASK_X, &sattr); st != 0 {
 			return st
 		}
-		if st := m.Access(ctx, parentDst, MODE_MASK_W, &dattr); st != 0 {
+		if dattr.Typ != TypeDirectory {
+			return syscall.ENOTDIR
+		}
+		if flags&RenameRestore == 0 && dattr.Parent > TrashInode {
+			return syscall.ENOENT
+		}
+		if st := m.Access(ctx, parentDst, MODE_MASK_W|MODE_MASK_X, &dattr); st != 0 {
 			return st
 		}
 		// TODO: check parentDst is a subdir of source node

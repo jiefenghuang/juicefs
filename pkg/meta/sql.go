@@ -2483,33 +2483,32 @@ func (m *dbMeta) doRename(ctx Context, parentSrc Ino, nameSrc string, parentDst 
 		var spattr, dpattr Attr
 		m.parseAttr(&spn, &spattr)
 		m.parseAttr(&dpn, &dpattr)
-		if flags&RenameRestore == 0 && dpattr.Parent > TrashInode {
-			return syscall.ENOENT
-		}
-		// Like Linux, only lookups are checked before detecting a rename
-		// between two names of the same file, which succeeds as a no-op.
-		if st := m.Access(ctx, parentSrc, MODE_MASK_X, &spattr); st != 0 {
-			return st
-		}
-		if st := m.Access(ctx, parentDst, MODE_MASK_X, &dpattr); st != 0 {
-			return st
-		}
-		se, ok, err := m.getEdge(ctx, s, parentSrc, nameSrc)
+		se, seFound, err := m.getEdge(ctx, s, parentSrc, nameSrc)
 		if err != nil {
 			return err
-		}
-		if !ok {
-			return syscall.ENOENT
 		}
 		var sn = node{Inode: se.Inode}
-		ok, err = s.Get(&sn)
-		if err != nil {
-			return err
+		var snFound, ok bool
+		var de edge
+		if seFound {
+			if snFound, err = s.Get(&sn); err != nil {
+				return err
+			}
+			if de, ok, err = m.getEdge(ctx, s, parentDst, nameDst); err != nil {
+				return err
+			}
+			if ok && parentSrc == parentDst && de.Id == se.Id && nameDst != nameSrc {
+				// case-insensitive lookup resolved the destination to the source
+				// itself; treat the destination as missing
+				ok = false
+				de = edge{Parent: parentDst, Name: []byte(nameDst)}
+			}
 		}
-		if !ok {
-			return syscall.ENOENT
-		}
-		if parentSrc == parentDst && string(se.Name) == nameDst {
+		// Like Linux, renaming between two names of the same file succeeds without
+		// any other action once both names are resolved.
+		if seFound && snFound && (ok && de.Inode == se.Inode || parentSrc == parentDst && string(se.Name) == nameDst) &&
+			(flags&RenameRestore != 0 || dpattr.Parent <= TrashInode) &&
+			m.Access(ctx, parentSrc, MODE_MASK_X, &spattr) == 0 && m.Access(ctx, parentDst, MODE_MASK_X, &dpattr) == 0 {
 			if flags&RenameNoReplace != 0 {
 				return syscall.EEXIST
 			}
@@ -2520,40 +2519,27 @@ func (m *dbMeta) doRename(ctx Context, parentSrc Ino, nameSrc string, parentDst 
 			*tInode = se.Inode
 			return nil
 		}
-		de, ok, err := m.getEdge(ctx, s, parentDst, nameDst)
-		if err != nil {
-			return err
-		}
-		if ok && parentSrc == parentDst && de.Id == se.Id && nameDst != nameSrc {
-			// case-insensitive lookup resolved the destination to the source
-			// itself; treat the destination as missing
-			ok = false
-			de = edge{Parent: parentDst, Name: []byte(nameDst)}
-		}
-		if ok && flags&RenameNoReplace != 0 {
-			return syscall.EEXIST
-		}
-		if ok && de.Inode == se.Inode {
-			if inode != nil {
-				*inode = se.Inode
-			}
-			m.parseAttr(&sn, attr)
-			*tInode = se.Inode
-			return nil
-		}
-
 		if (spn.Flags&FlagAppend) != 0 || (spn.Flags&FlagImmutable) != 0 || (dpn.Flags&FlagImmutable) != 0 {
 			return syscall.EPERM
 		}
-		if st := m.Access(ctx, parentSrc, MODE_MASK_W, &spattr); st != 0 {
+		if flags&RenameRestore == 0 && dpattr.Parent > TrashInode {
+			return syscall.ENOENT
+		}
+		if st := m.Access(ctx, parentSrc, MODE_MASK_W|MODE_MASK_X, &spattr); st != 0 {
 			return st
 		}
-		if st := m.Access(ctx, parentDst, MODE_MASK_W, &dpattr); st != 0 {
+		if st := m.Access(ctx, parentDst, MODE_MASK_W|MODE_MASK_X, &dpattr); st != 0 {
 			return st
+		}
+		if !seFound {
+			return syscall.ENOENT
 		}
 		// TODO: check parentDst is a subdir of source node
 		if se.Inode == parentDst || se.Inode == dpattr.Parent {
 			return syscall.EPERM
+		}
+		if !snFound {
+			return syscall.ENOENT
 		}
 		var sattr Attr
 		m.parseAttr(&sn, &sattr)
@@ -2570,6 +2556,9 @@ func (m *dbMeta) doRename(ctx Context, parentSrc Ino, nameSrc string, parentDst 
 		now := time.Now().UnixNano()
 		dn = node{Inode: de.Inode}
 		if ok {
+			if flags&RenameNoReplace != 0 {
+				return syscall.EEXIST
+			}
 			dino = de.Inode
 			ok, err := s.ForUpdate().Get(&dn)
 			if err != nil {

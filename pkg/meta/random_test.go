@@ -784,6 +784,10 @@ func (m *fsMachine) isancestor(a, b *tNode) bool {
 
 func (m *fsMachine) rename(srcparent Ino, srcname string, dstparent Ino, dstname string, flag uint8) syscall.Errno {
 	if dstparent == srcparent && dstname == srcname {
+		// like Linux, only the lookup is checked when renaming to the same name
+		if src := m.nodes[srcparent]; src != nil && !src.access(m.ctx, MODE_MASK_X) {
+			return syscall.EACCES
+		}
 		return 0
 	}
 	if err := checkFSNodeName(dstname); err != 0 {
