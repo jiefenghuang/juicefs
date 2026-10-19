@@ -1991,7 +1991,12 @@ func (m *baseMeta) Rename(ctx Context, parentSrc Ino, nameSrc string, parentDst 
 		}
 		// TODO: dst exists and is replaced or exchanged
 		if quotaDst > 0 && m.checkDirQuota(ctx, parentDst, space, inodes) {
-			return syscall.EDQUOT
+			// renaming to another name of the same file is a no-op
+			var dino Ino
+			var dattr Attr
+			if attr.Typ == TypeDirectory || m.Lookup(ctx, parentDst, nameDst, &dino, &dattr, false) != 0 || dino != *inode {
+				return syscall.EDQUOT
+			}
 		}
 	}
 	tinode := new(Ino)

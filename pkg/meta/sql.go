@@ -2480,19 +2480,18 @@ func (m *dbMeta) doRename(ctx Context, parentSrc Ino, nameSrc string, parentDst 
 		if spn.Type != TypeDirectory || dpn.Type != TypeDirectory {
 			return syscall.ENOTDIR
 		}
-		if (spn.Flags&FlagAppend) != 0 || (spn.Flags&FlagImmutable) != 0 || (dpn.Flags&FlagImmutable) != 0 {
-			return syscall.EPERM
-		}
 		var spattr, dpattr Attr
 		m.parseAttr(&spn, &spattr)
 		m.parseAttr(&dpn, &dpattr)
 		if flags&RenameRestore == 0 && dpattr.Parent > TrashInode {
 			return syscall.ENOENT
 		}
-		if st := m.Access(ctx, parentSrc, MODE_MASK_W|MODE_MASK_X, &spattr); st != 0 {
+		// Like Linux, only lookups are checked before detecting a rename
+		// between two names of the same file, which succeeds as a no-op.
+		if st := m.Access(ctx, parentSrc, MODE_MASK_X, &spattr); st != 0 {
 			return st
 		}
-		if st := m.Access(ctx, parentDst, MODE_MASK_W|MODE_MASK_X, &dpattr); st != 0 {
+		if st := m.Access(ctx, parentDst, MODE_MASK_X, &dpattr); st != 0 {
 			return st
 		}
 		se, ok, err := m.getEdge(ctx, s, parentSrc, nameSrc)
@@ -2502,16 +2501,6 @@ func (m *dbMeta) doRename(ctx Context, parentSrc Ino, nameSrc string, parentDst 
 		if !ok {
 			return syscall.ENOENT
 		}
-		if parentSrc == parentDst && string(se.Name) == nameDst {
-			if inode != nil {
-				*inode = se.Inode
-			}
-			return nil
-		}
-		// TODO: check parentDst is a subdir of source node
-		if se.Inode == parentDst || se.Inode == dpattr.Parent {
-			return syscall.EPERM
-		}
 		var sn = node{Inode: se.Inode}
 		ok, err = s.Get(&sn)
 		if err != nil {
@@ -2520,18 +2509,16 @@ func (m *dbMeta) doRename(ctx Context, parentSrc Ino, nameSrc string, parentDst 
 		if !ok {
 			return syscall.ENOENT
 		}
-		var sattr Attr
-		m.parseAttr(&sn, &sattr)
-		if parentSrc != parentDst && spattr.Mode&0o1000 != 0 && ctx.Uid() != 0 &&
-			ctx.Uid() != sattr.Uid && (ctx.Uid() != spattr.Uid || sattr.Typ == TypeDirectory) {
-			return syscall.EACCES
-		}
-		if (sn.Flags&FlagAppend) != 0 || (sn.Flags&FlagImmutable) != 0 {
-			return syscall.EPERM
-		}
-
-		if st := m.Access(ctx, parentDst, MODE_MASK_W|MODE_MASK_X, &dpattr); st != 0 {
-			return st
+		if parentSrc == parentDst && string(se.Name) == nameDst {
+			if flags&RenameNoReplace != 0 {
+				return syscall.EEXIST
+			}
+			if inode != nil {
+				*inode = se.Inode
+			}
+			m.parseAttr(&sn, attr)
+			*tInode = se.Inode
+			return nil
 		}
 		de, ok, err := m.getEdge(ctx, s, parentDst, nameDst)
 		if err != nil {
@@ -2543,14 +2530,46 @@ func (m *dbMeta) doRename(ctx Context, parentSrc Ino, nameSrc string, parentDst 
 			ok = false
 			de = edge{Parent: parentDst, Name: []byte(nameDst)}
 		}
+		if ok && flags&RenameNoReplace != 0 {
+			return syscall.EEXIST
+		}
+		if ok && de.Inode == se.Inode {
+			if inode != nil {
+				*inode = se.Inode
+			}
+			m.parseAttr(&sn, attr)
+			*tInode = se.Inode
+			return nil
+		}
+
+		if (spn.Flags&FlagAppend) != 0 || (spn.Flags&FlagImmutable) != 0 || (dpn.Flags&FlagImmutable) != 0 {
+			return syscall.EPERM
+		}
+		if st := m.Access(ctx, parentSrc, MODE_MASK_W, &spattr); st != 0 {
+			return st
+		}
+		if st := m.Access(ctx, parentDst, MODE_MASK_W, &dpattr); st != 0 {
+			return st
+		}
+		// TODO: check parentDst is a subdir of source node
+		if se.Inode == parentDst || se.Inode == dpattr.Parent {
+			return syscall.EPERM
+		}
+		var sattr Attr
+		m.parseAttr(&sn, &sattr)
+		if parentSrc != parentDst && spattr.Mode&0o1000 != 0 && ctx.Uid() != 0 &&
+			ctx.Uid() != sattr.Uid && (ctx.Uid() != spattr.Uid || sattr.Typ == TypeDirectory) {
+			return syscall.EACCES
+		}
+		if (sn.Flags&FlagAppend) != 0 || (sn.Flags&FlagImmutable) != 0 {
+			return syscall.EPERM
+		}
+
 		var supdate, dupdate bool
 		var srcnlink, dstnlink int32
 		now := time.Now().UnixNano()
 		dn = node{Inode: de.Inode}
 		if ok {
-			if flags&RenameNoReplace != 0 {
-				return syscall.EEXIST
-			}
 			dino = de.Inode
 			ok, err := s.ForUpdate().Get(&dn)
 			if err != nil {
@@ -2585,13 +2604,6 @@ func (m *dbMeta) doRename(ctx Context, parentSrc Ino, nameSrc string, parentDst 
 						dn.Parent = parentSrc
 					}
 				}
-			} else if de.Inode == se.Inode {
-				if inode != nil {
-					*inode = se.Inode
-				}
-				m.parseAttr(&sn, attr)
-				*tInode = dino
-				return nil
 			} else if ctx.Uid() != 0 && spn.Mode&01000 != 0 && ctx.Uid() != spn.Uid && ctx.Uid() != sn.Uid {
 				return syscall.EACCES
 			} else if se.Type == TypeDirectory && de.Type != TypeDirectory {

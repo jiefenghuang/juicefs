@@ -208,6 +208,7 @@ func testMeta(t *testing.T, m Meta) {
 	testCheckAndRepair(t, m)
 	testDirStat(t, m)
 	testRenameDirStat(t, m)
+	testRenameSameFile(t, m)
 	testRenameDirStatWithTrash(t, m)
 	testClone(t, m)
 	testCleanupDetachedNodes(t, m)
@@ -4011,6 +4012,138 @@ func testRenameDirStat(t *testing.T, m Meta) {
 		assertInodes(t, m, "Test 7 cleanup dir1", dir1, 0)
 		assertInodes(t, m, "Test 7 cleanup dir2", dir2, 0)
 		t.Logf("Test 7 passed: rename between hard links")
+	}
+}
+
+// Renaming between two names of the same file follows Linux: only lookups
+// are checked before it succeeds as a no-op.
+func testRenameSameFile(t *testing.T, m Meta) {
+	ctx := Background()
+	user := NewContext(0, 1000, []uint32{1000})
+	setFlags := func(ino Ino, flags uint8) {
+		if st := m.SetAttr(ctx, ino, SetAttrFlag, 0, &Attr{Flags: flags}); st != 0 {
+			t.Fatalf("set flags of %d: %s", ino, st)
+		}
+	}
+	setMode := func(ino Ino, mode uint16) {
+		if st := m.SetAttr(ctx, ino, SetAttrMode, 0, &Attr{Mode: mode}); st != 0 {
+			t.Fatalf("set mode of %d: %s", ino, st)
+		}
+	}
+	var top, d1, d2, a, ino Ino
+	var attr Attr
+	if st := m.Mkdir(ctx, RootInode, "samefile", 0777, 0, 0, &top, &attr); st != 0 {
+		t.Fatalf("mkdir samefile: %s", st)
+	}
+	defer m.Rmdir(ctx, RootInode, "samefile")
+
+	cases := []struct {
+		name     string
+		ctx      Context
+		setup    func()
+		sameName bool
+		want     [3]syscall.Errno // flags 0, RenameNoReplace, RenameExchange
+	}{
+		{"hard links", ctx, func() {}, false, [3]syscall.Errno{0, syscall.EEXIST, 0}},
+		{"same name", ctx, func() {}, true, [3]syscall.Errno{0, syscall.EEXIST, 0}},
+		{"immutable source", ctx, func() { setFlags(a, FlagImmutable) }, false, [3]syscall.Errno{0, syscall.EEXIST, 0}},
+		{"append-only source", ctx, func() { setFlags(a, FlagAppend) }, false, [3]syscall.Errno{0, syscall.EEXIST, 0}},
+		{"immutable source parent", ctx, func() { setFlags(d1, FlagImmutable) }, false, [3]syscall.Errno{0, syscall.EEXIST, 0}},
+		{"source parent not writable", user, func() { setMode(d1, 0555) }, false, [3]syscall.Errno{0, syscall.EEXIST, 0}},
+		{"target parent not writable", user, func() { setMode(d2, 0555) }, false, [3]syscall.Errno{0, syscall.EEXIST, 0}},
+		{"same name, parent not writable", user, func() { setMode(d1, 0555) }, true, [3]syscall.Errno{0, syscall.EEXIST, 0}},
+		{"sticky source parent", user, func() { setMode(d1, 01777) }, false, [3]syscall.Errno{0, syscall.EEXIST, 0}},
+		{"source parent not searchable", user, func() { setMode(d1, 0666) }, false, [3]syscall.Errno{syscall.EACCES, syscall.EACCES, syscall.EACCES}},
+	}
+	for _, c := range cases {
+		attr = Attr{}
+		for _, d := range []struct {
+			name string
+			ino  *Ino
+		}{{"d1", &d1}, {"d2", &d2}} {
+			if st := m.Mkdir(ctx, top, d.name, 0777, 0, 0, d.ino, &attr); st != 0 {
+				t.Fatalf("%s: mkdir %s: %s", c.name, d.name, st)
+			}
+			setMode(*d.ino, 0777)
+		}
+		if st := m.Create(ctx, d1, "a", 0644, 0, 0, &a, &attr); st != 0 {
+			t.Fatalf("%s: create a: %s", c.name, st)
+		}
+		if st := m.Link(ctx, a, d2, "b", &attr); st != 0 {
+			t.Fatalf("%s: link b: %s", c.name, st)
+		}
+		c.setup()
+		dst, dstName := d2, "b"
+		if c.sameName {
+			dst, dstName = d1, "a"
+		}
+		for i, flags := range []uint32{0, RenameNoReplace, RenameExchange} {
+			ino, attr = 0, Attr{}
+			st := m.Rename(c.ctx, d1, "a", dst, dstName, flags, &ino, &attr)
+			if st != c.want[i] {
+				t.Fatalf("%s: rename (flags %d): got %s, want %s", c.name, flags, st, c.want[i])
+			}
+			if st == 0 && (ino != a || attr.Typ != TypeFile) {
+				t.Fatalf("%s: rename (flags %d): inode=%d type=%d, want inode=%d type=%d", c.name, flags, ino, attr.Typ, a, TypeFile)
+			}
+			for _, e := range []struct {
+				parent Ino
+				name   string
+			}{{d1, "a"}, {d2, "b"}} {
+				if st := m.Lookup(ctx, e.parent, e.name, &ino, &attr, false); st != 0 || ino != a {
+					t.Fatalf("%s: lookup %s after rename (flags %d): inode=%d st=%s, want %d", c.name, e.name, flags, ino, st, a)
+				}
+			}
+		}
+		setFlags(a, 0)
+		setFlags(d1, 0)
+		setMode(d1, 0777)
+		setMode(d2, 0777)
+		if st := m.Unlink(ctx, d1, "a"); st != 0 {
+			t.Fatalf("%s: unlink a: %s", c.name, st)
+		}
+		if st := m.Unlink(ctx, d2, "b"); st != 0 {
+			t.Fatalf("%s: unlink b: %s", c.name, st)
+		}
+		if st := m.Rmdir(ctx, top, "d1"); st != 0 {
+			t.Fatalf("%s: rmdir d1: %s", c.name, st)
+		}
+		if st := m.Rmdir(ctx, top, "d2"); st != 0 {
+			t.Fatalf("%s: rmdir d2: %s", c.name, st)
+		}
+	}
+
+	// A no-op rename never exceeds the quota of the target directory.
+	var q Ino
+	attr = Attr{}
+	if st := m.Mkdir(ctx, top, "q", 0777, 0, 0, &q, &attr); st != 0 {
+		t.Fatalf("mkdir q: %s", st)
+	}
+	if st := m.Create(ctx, top, "a", 0644, 0, 0, &a, &attr); st != 0 {
+		t.Fatalf("create a: %s", st)
+	}
+	if st := m.Link(ctx, a, q, "b", &attr); st != 0 {
+		t.Fatalf("link q/b: %s", st)
+	}
+	if err := m.HandleQuota(ctx, QuotaSet, "/samefile/q", DirQuotaType, map[string]*Quota{"/samefile/q": {MaxInodes: 1}}, false, false, false); err != nil {
+		t.Fatalf("set quota: %s", err)
+	}
+	m.getBase().loadQuotas()
+	if st := m.Rename(ctx, top, "a", q, "b", 0, &ino, &attr); st != 0 {
+		t.Fatalf("rename a to q/b with full quota: %s", st)
+	}
+	if err := m.HandleQuota(ctx, QuotaDel, "/samefile/q", DirQuotaType, nil, false, false, false); err != nil {
+		t.Fatalf("delete quota: %s", err)
+	}
+	m.getBase().loadQuotas()
+	if st := m.Unlink(ctx, top, "a"); st != 0 {
+		t.Fatalf("unlink a: %s", st)
+	}
+	if st := m.Unlink(ctx, q, "b"); st != 0 {
+		t.Fatalf("unlink q/b: %s", st)
+	}
+	if st := m.Rmdir(ctx, top, "q"); st != 0 {
+		t.Fatalf("rmdir q: %s", st)
 	}
 }
 
